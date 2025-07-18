@@ -323,6 +323,8 @@ ball = GameObject:new{
   dx = 0, dy = 0,
   radius = 8,
   spin = 0,
+  spin_nx = 0,
+  spin_ny = 0,
 
   update = function(self)
     if game.freeze then return end
@@ -353,6 +355,7 @@ ball = GameObject:new{
     local dy = self.y + 8 - cy
     local dist = sqrt(dx * dx + dy * dy)
     if dist < self.radius + 8 then
+      if dist == 0 then dist = 0.01 end
       local nx, ny = dx / dist, dy / dist
       local relx = self.dx - car.dx
       local rely = self.dy - car.dy
@@ -362,11 +365,13 @@ ball = GameObject:new{
       self.dx += car.dx * 0.2
       self.dy += car.dy * 0.2
       self.spin += (car.dx * ny - car.dy * nx) * 0.1
+      self.spin_nx = nx
+      self.spin_ny = ny
     end
 
     -- aplicar spin
-    self.dx += -ny * self.spin
-    self.dy += nx * self.spin
+    self.dx += -self.spin_ny * self.spin
+    self.dy += self.spin_nx * self.spin
     self.spin *= 0.95
   end,
 
