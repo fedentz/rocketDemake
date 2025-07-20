@@ -1,6 +1,22 @@
-car = {
-  x = 18*8, y = 6*8,
+-- objeto base para compartir comportamiento
+GameObject = {}
+function GameObject:new(o)
+  o = o or {}
+  setmetatable(o, self)
+  self.__index = self
+  return o
+end
+
+function GameObject:update() end
+function GameObject:draw() end
+
+ias = {}
+
+-- vehículo del jugador
+car = GameObject:new{
+  x = 18 * 8, y = 6 * 8,
   dx = 0, dy = 0,
+  ax = 0, ay = 0,
   angle = 0.5,
   boost = 10,
   speed = 0,
@@ -24,38 +40,36 @@ car = {
   update = function(self)
     if self.frozen then return end
 
+    -- rotación
     if btn(0) then self.angle += 0.05 end
     if btn(1) then self.angle -= 0.05 end
 
+    -- aceleración principal
     if btn(2) then
-      self.dx += sin(self.angle)*0.1
-      self.dy += -cos(self.angle)*0.1
+      self.ax += sin(self.angle) * 0.15
+      self.ay += -cos(self.angle) * 0.15
+    elseif btn(3) then
+      self.ax -= sin(self.angle) * 0.1
+      self.ay -= -cos(self.angle) * 0.1
     end
 
-    if btn(3) then
-      self.dx -= sin(self.angle)*0.05
-      self.dy -= -cos(self.angle)*0.05
-    end
-
+    -- impulso con boost
     if btn(4) and self.boost > 0 then
-      self.dx += sin(self.angle)*0.2
-      self.dy += -cos(self.angle)*0.2
-      self.boost -= 0.2
+      self.ax += sin(self.angle) * 0.3
+      self.ay += -cos(self.angle) * 0.3
+      self.boost = max(self.boost - 0.2, 0)
     end
 
     if self.flick_cooldown > 0 then
-      self.flick_cooldown -= 1/30
+      self.flick_cooldown -= 1 / 30
     end
 
+    -- dash si se presiona dos veces salto
     if btnp(5) and self.flick_cooldown <= 0 then
       if time() - self.last_flick_time < 0.25 then
-        local dash_strength = 2.0
-        local dash_angle = self.angle
-        if btn(3) then dash_angle += 0.5 end
-
-        self.dx += sin(dash_angle) * dash_strength
-        self.dy += -cos(dash_angle) * dash_strength
-
+        local dash_strength = 3.0
+        self.dx += sin(self.angle) * dash_strength
+        self.dy += -cos(self.angle) * dash_strength
         self.flick_active = true
         self.flick_timer = 6
         self.sprite_id = 10
@@ -72,22 +86,36 @@ car = {
       end
     end
 
+    -- aplicar aceleración y fricción
+    self.dx += self.ax
+    self.dy += self.ay
+    self.ax, self.ay = 0, 0
+
+    local drag = btn(2) and 0.97 or 0.92
+    self.dx *= drag
+    self.dy *= drag
+
     local max_speed = 4.5
-    local current_speed = sqrt(self.dx^2 + self.dy^2)
-    if current_speed > max_speed then
-      local scale = max_speed / current_speed
-      self.dx *= scale
-      self.dy *= scale
+    local vel = sqrt(self.dx^2 + self.dy^2)
+    if vel > max_speed then
+      local sc = max_speed / vel
+      self.dx *= sc
+      self.dy *= sc
     end
 
-    self.dx *= 0.93
-    self.dy *= 0.93
+    -- influencia del giro en el vector de velocidad
+    if vel > 0.01 then
+      local va = atan2(self.dy, self.dx)
+      va += (self.angle - va) * 0.1
+      self.dx = cos(va) * vel
+      self.dy = sin(va) * vel
+    end
 
     self.x += self.dx
     self.y += self.dy
 
-    local min_x, max_x = 0, 39*8
-    local min_y, max_y = 2*8, 25*8
+    local min_x, max_x = 0, 39 * 8
+    local min_y, max_y = 2 * 8, 25 * 8
 
     if self.x < min_x then self.x = min_x self.dx *= -0.5 end
     if self.x > max_x - 16 then self.x = max_x - 16 self.dx *= -0.5 end
@@ -195,144 +223,108 @@ function draw_rotated_sprite(spr_id, cx, cy, w, h, angle)
 end
 
 
--- configuraciれはn mejorada de ias
-function create_ia(team, x, y, sprite)
-    local ia = {
-        sprite = sprite or 6,
-        x = x,
-        y = y,
-        dx = 0,
-        dy = 0,
-        angle = 0.5,
-        turn_rate = 0.05,
-        team = team,
-        boost = 4,
-        freeze_start = 0,
-        target_x = x,
-        target_y = y,
-        push_force = 1.2,  -- fuerza mれくs moderada
-        detection_radius = 80,
-        speed = 0.15,      -- velocidad reducida
-        avoidance_force = 0.2  -- nueva: fuerza para evitar agrupamiento
-    }
-    return ia
+-- objeto ia con estados simples
+IA = GameObject:new{
+  sprite = 6,
+  x = 0, y = 0,
+  dx = 0, dy = 0,
+  angle = 0,
+  state = "perseguir",
+  team = "orange",
+  turn_rate = 0.05,
+  speed = 0.15,
+  avoidance_force = 0.2,
+}
+
+function spawn_ias()
+  ias = {}
+  if game.mode == "1v1" then
+    add(ias, IA:new{team = "orange", x = 28 * 8, y = 13 * 8})
+  elseif game.mode == "2v2" then
+    add(ias, IA:new{team = "orange", x = 28 * 8, y = 13 * 8})
+    add(ias, IA:new{team = "orange", x = 30 * 8, y = 15 * 8})
+    add(ias, IA:new{team = "blue", x = 10 * 8, y = 13 * 8})
+  end
 end
 
--- funciれはn de actualizaciれはn mejorada
-function update_ia(ia)
-    if ia.freeze_start > 0 then
-        ia.freeze_start -= 1
-        return
-    end
+function IA:update()
+  if game.freeze then return end
+  local bx = ball.x + ball.dx * 15
+  local by = ball.y + ball.dy * 15
+  local cx, cy = self.x + 8, self.y + 8
 
-    local cx, cy = ia.x + 8, ia.y + 8
-    local bx, by = ball.x + 4, ball.y + 4
+  if self.state == "perseguir" then
+    self.target_x, self.target_y = bx, by
+  end
 
-    -- 1. comportamiento estratれたgico por equipo
-    local target_x, target_y = bx, by  -- por defecto sigue la pelota
-    
-    if ia.team == "blue" then
-        -- comportamiento defensivo
-        local ball_to_blue_goal = sqrt((bx-2*8)^2 + (by-13*8)^2)
-        if ball_to_blue_goal < 120 then
-            target_x, target_y = (bx + 2*8)/2, (by + 13*8)/2  -- posiciれはn intermedia
-        end
-    else
-        -- comportamiento ofensivo
-        local ball_to_orange_goal = sqrt((bx-37*8)^2 + (by-13*8)^2)
-        if ball_to_orange_goal > 100 then
-            target_x, target_y = (bx + 37*8)/2, (by + 13*8)/2
-        end
-    end
+  local dx = self.target_x - cx
+  local dy = self.target_y - cy
+  local dist = sqrt(dx * dx + dy * dy)
 
-    -- 2. movimiento suavizado hacia el objetivo
-    local dx = target_x - cx
-    local dy = target_y - cy
-    local dist = sqrt(dx*dx + dy*dy)
-    
-    if dist > 5 then  -- solo mover si estれく suficientemente lejos
-        local target_angle = atan2(dy, dx)
-        local angle_diff = ((target_angle - ia.angle + 0.5) % 1) - 0.5
-        
-        ia.angle = (ia.angle + mid(-ia.turn_rate, angle_diff, ia.turn_rate)) % 1
-        
-        if abs(angle_diff) < 0.25 then  -- solo acelerar si estれく alineado
-            local force = min(ia.speed, dist/100)  -- fuerza proporcional a la distancia
-            ia.dx += sin(ia.angle) * force
-            ia.dy += -cos(ia.angle) * force
-        end
+  if dist > 5 then
+    local target_angle = atan2(dy, dx)
+    local diff = ((target_angle - self.angle + 0.5) % 1) - 0.5
+    self.angle = (self.angle + mid(-self.turn_rate, diff, self.turn_rate)) % 1
+    if abs(diff) < 0.25 then
+      local force = min(self.speed, dist / 100)
+      self.dx += sin(self.angle) * force
+      self.dy += -cos(self.angle) * force
     end
+  end
 
-    -- 3. fれとsica mejorada
-    ia.dx *= 0.95  -- mayor fricciれはn
-    ia.dy *= 0.95
-    ia.x += ia.dx
-    ia.y += ia.dy
+  self.dx *= 0.95
+  self.dy *= 0.95
+  self.x += self.dx
+  self.y += self.dy
 
-    -- 4. lれとmites del campo con rebote mejorado
-    local min_x, max_x = 8, 38*8
-    local min_y, max_y = 2*8, 24*8
-    
-    if ia.x < min_x then 
-        ia.x = min_x 
-        ia.dx = abs(ia.dx) * 0.7  -- rebote mれくs suave
-    end
-    if ia.x > max_x then 
-        ia.x = max_x 
-        ia.dx = -abs(ia.dx) * 0.7
-    end
-    if ia.y < min_y then 
-        ia.y = min_y 
-        ia.dy = abs(ia.dy) * 0.7
-    end
-    if ia.y > max_y then 
-        ia.y = max_y 
-        ia.dy = -abs(ia.dy) * 0.7
-    end
+  local min_x, max_x = 8, 38 * 8
+  local min_y, max_y = 2 * 8, 24 * 8
+  if self.x < min_x then self.x = min_x self.dx = abs(self.dx) * 0.7 end
+  if self.x > max_x then self.x = max_x self.dx = -abs(self.dx) * 0.7 end
+  if self.y < min_y then self.y = min_y self.dy = abs(self.dy) * 0.7 end
+  if self.y > max_y then self.y = max_y self.dy = -abs(self.dy) * 0.7 end
 
-    -- 5. interacciれはn con pelota (mれくs controlada)
-    local ball_dist = sqrt((bx-cx)^2 + (by-cy)^2)
-    if ball_dist < 14 then
-        local push_angle = atan2(by-cy, bx-cx)
-        ball.dx += cos(push_angle) * ia.push_force * min(1, (14-ball_dist)/4)
-        ball.dy += sin(push_angle) * ia.push_force * min(1, (14-ball_dist)/4)
-    end
+  local ball_dist = sqrt((ball.x + 8 - cx)^2 + (ball.y + 8 - cy)^2)
+  if ball_dist < 14 then
+    local push_angle = atan2(ball.y + 8 - cy, ball.x + 8 - cx)
+    ball.dx += cos(push_angle) * 1.2 * min(1, (14 - ball_dist) / 4)
+    ball.dy += sin(push_angle) * 1.2 * min(1, (14 - ball_dist) / 4)
+  end
 
-    -- 6. evitaciれはn de colisiones mejorada
-    local avoidance_x, avoidance_y = 0, 0
-    
-    -- con el jugador
-    local player_dist = sqrt((ia.x-car.x)^2 + (ia.y-car.y)^2)
-    if player_dist < 24 then
-        local avoid_angle = atan2(ia.y-car.y, ia.x-car.x)
-        avoidance_x += cos(avoid_angle) * ia.avoidance_force
-        avoidance_y += sin(avoid_angle) * ia.avoidance_force
+  local avoidance_x, avoidance_y = 0, 0
+  local player_dist = sqrt((self.x - car.x)^2 + (self.y - car.y)^2)
+  if player_dist < 24 then
+    local avoid_angle = atan2(self.y - car.y, self.x - car.x)
+    avoidance_x += cos(avoid_angle) * self.avoidance_force
+    avoidance_y += sin(avoid_angle) * self.avoidance_force
+  end
+
+  for other in all(ias) do
+    if other ~= self then
+      local od = sqrt((self.x - other.x)^2 + (self.y - other.y)^2)
+      if od < 24 then
+        local avoid = atan2(self.y - other.y, self.x - other.x)
+        avoidance_x += cos(avoid) * self.avoidance_force * 0.6
+        avoidance_y += sin(avoid) * self.avoidance_force * 0.6
+      end
     end
-    
-    -- con otras ias
-    for other in all(ias) do
-        if other ~= ia then
-            local other_dist = sqrt((ia.x-other.x)^2 + (ia.y-other.y)^2)
-            if other_dist < 24 then
-                local avoid_angle = atan2(ia.y-other.y, ia.x-other.x)
-                avoidance_x += cos(avoid_angle) * ia.avoidance_force * 0.6
-                avoidance_y += sin(avoid_angle) * ia.avoidance_force * 0.6
-            end
-        end
-    end
-    
-    -- aplicar fuerzas de evitaciれはn
-    ia.dx += avoidance_x
-    ia.dy += avoidance_y
+  end
+
+  self.dx += avoidance_x
+  self.dy += avoidance_y
 end
 
 
 
 
 
-ball = {
+ball = GameObject:new{
   x = 120, y = 120,
   dx = 0, dy = 0,
+  radius = 8,
+  spin = 0,
+  spin_nx = 0,
+  spin_ny = 0,
 
   update = function(self)
     if game.freeze then return end
@@ -350,19 +342,37 @@ ball = {
       game:goal("orange", speed) return
     end
 
-    if self.x < min_x then self.x = min_x self.dx *= -1 end
-    if self.x > max_x - 16 then self.x = max_x - 16 self.dx *= -1 end
-    if self.y < min_y then self.y = min_y self.dy *= -1 end
-    if self.y > max_y - 16 then self.y = max_y - 16 self.dy *= -1 end
+    if self.x < min_x then self.x = min_x self.dx = abs(self.dx) end
+    if self.x > max_x - 16 then self.x = max_x - 16 self.dx = -abs(self.dx) end
+    if self.y < min_y then self.y = min_y self.dy = abs(self.dy) end
+    if self.y > max_y - 16 then self.y = max_y - 16 self.dy = -abs(self.dy) end
 
     self.dx *= 0.98
     self.dy *= 0.98
-
-    local d = sqrt((self.x - car.x)^2 + (self.y - car.y)^2)
-    if d < 16 then
-      self.dx = (self.x - car.x) * 0.2 + car.dx * 0.3
-      self.dy = (self.y - car.y) * 0.2 + car.dy * 0.3
+    -- colisión con el coche mediante círculos
+    local cx, cy = car.x + 8, car.y + 8
+    local dx = self.x + 8 - cx
+    local dy = self.y + 8 - cy
+    local dist = sqrt(dx * dx + dy * dy)
+    if dist < self.radius + 8 then
+      if dist == 0 then dist = 0.01 end
+      local nx, ny = dx / dist, dy / dist
+      local relx = self.dx - car.dx
+      local rely = self.dy - car.dy
+      local dot = relx * nx + rely * ny
+      self.dx -= 2 * dot * nx
+      self.dy -= 2 * dot * ny
+      self.dx += car.dx * 0.2
+      self.dy += car.dy * 0.2
+      self.spin += (car.dx * ny - car.dy * nx) * 0.1
+      self.spin_nx = nx
+      self.spin_ny = ny
     end
+
+    -- aplicar spin
+    self.dx += -self.spin_ny * self.spin
+    self.dy += self.spin_nx * self.spin
+    self.spin *= 0.95
   end,
 
   draw = function(self)
@@ -472,24 +482,7 @@ game = {
       car.boost = 4
     end
 
-    if iatest then
-      if team == "blue" then
-        iatest.x = 28 * 8
-        iatest.y = 13 * 8
-        iatest.angle = 0.5
-      else
-        iatest.x = 10 * 8
-        iatest.y = 13 * 8
-        iatest.angle = 0
-      end
-      iatest.dx = 0
-      iatest.dy = 0
-      iatest.boost = 4
-      if ball then
-        iatest.target_x = ball.x + 4
-        iatest.target_y = ball.y + 4
-      end
-    end
+    spawn_ias()
   end,
 
   update = function(self)
@@ -508,44 +501,42 @@ game = {
       return
     end
 
-    if self.timer == 60 * 3 * 30 and self.countdown_timer == 0 then
-      self.countdown_timer = 30
-    end
+    if self.mode ~= "practica" then
+      if self.timer == 60 * 3 * 30 and self.countdown_timer == 0 then
+        self.countdown_timer = 30
+      end
 
-    if self.timer > 0 then
-      self.timer -= 1
-    elseif self.timer == 0 then
-      if not self.freeze and self.score_blue != self.score_orange then
-        self.goal_message = self.score_blue > self.score_orange and "gana azul" or "gana naranja"
-        self.freeze = true
-        self.freeze_timer = 300
-      elseif not self.freeze then
-        self.goal_message = "empate!"
-        self.freeze = true
-        self.freeze_timer = 300
+      if self.timer > 0 then
+        self.timer -= 1
+      elseif self.timer == 0 then
+        if not self.freeze and self.score_blue != self.score_orange then
+          self.goal_message = self.score_blue > self.score_orange and "gana azul" or "gana naranja"
+          self.freeze = true
+          self.freeze_timer = 300
+        elseif not self.freeze then
+          self.goal_message = "empate!"
+          self.freeze = true
+          self.freeze_timer = 300
+        end
       end
     end
 
     if car and car.update then car:update() end
-    if update_iatest then update_iatest() end
+    for ia in all(ias) do ia:update() end
     if ball and ball.update then ball:update() end
     if boost_pads and boost_pads.check then boost_pads:check() end
-
-    if iatest and car then
-      local ia = iatest
-      local dist_x = (ia.x + 8) - (car.x + 8)
-      local dist_y = (ia.y + 8) - (car.y + 8)
-      local cd_sq = dist_x * dist_x + dist_y * dist_y
+    for ia in all(ias) do
+      local dx = (ia.x + 8) - (car.x + 8)
+      local dy = (ia.y + 8) - (car.y + 8)
+      local cd_sq = dx * dx + dy * dy
       if cd_sq < 16 * 16 then
-        local actual_dist = sqrt(cd_sq)
-        if actual_dist == 0 then actual_dist = 0.001 end
-        local angle_to_car = atan2(dist_y, dist_x)
-        local rad = angle_to_car
-        local push_force = 0.5
-        ia.dx -= cos(rad) * push_force
-        ia.dy -= sin(rad) * push_force
-        car.dx += cos(rad) * push_force
-        car.dy += sin(rad) * push_force
+        local dist = sqrt(cd_sq)
+        local a = atan2(dy, dx)
+        local push = 0.5
+        ia.dx -= cos(a) * push
+        ia.dy -= sin(a) * push
+        car.dx += cos(a) * push
+        car.dy += sin(a) * push
       end
     end
   end,
@@ -561,16 +552,19 @@ game = {
     map(0, 0, 0, 0, 64, 64)
 
     if car and car.draw then car:draw() end
-    if draw_iatest_global then draw_iatest_global() end
+    for ia in all(ias) do
+      if ia.draw then spr(ia.sprite, ia.x, ia.y, 2, 2) end
+    end
     if ball and ball.draw then ball:draw() end
     if boost_pads and boost_pads.draw then boost_pads:draw() end
 
     camera()
 
     local time_left = flr(self.timer / 30)
+    if self.mode == "practica" then time_left = -1 end
     local s_orange = tostr(self.score_orange)
     local s_blue = tostr(self.score_blue)
-    local s_time = tostr(time_left)
+    local s_time = (time_left >= 0) and tostr(time_left) or "inf"
 
     local bw = 16
     local bh = 10
@@ -688,11 +682,12 @@ menu = {
       elseif opt == "2v2" then
         game.mode = "2v2"
       end
-      game.timer = 60 * 3 * 30
+      game.timer = (game.mode == "practica") and 0 or 60 * 3 * 30
       game.countdown_timer = 30
       game.freeze = false
       game.goal_message = ""
       game.state = "game"
+      spawn_ias()
     end
   end,
 
